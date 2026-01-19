@@ -6,7 +6,7 @@ app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET"]
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
-REDIRECT_URI = "https://YOUR-RENDER-URL/oauth2callback"
+REDIRECT_URI = "https://deadline-sync.onrender.com"
 
 @app.route("/")
 def home():
