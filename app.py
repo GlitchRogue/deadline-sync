@@ -1,6 +1,6 @@
 import os
 import datetime
-from flask import Flask, redirect, request, url_for
+from flask import Flask, redirect, request, url_for, session
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
@@ -9,8 +9,6 @@ app.secret_key = os.environ.get("FLASK_SECRET", "dev-secret")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 REDIRECT_URI = "https://deadline-sync.onrender.com"
-
-creds_store = {}
 
 @app.route("/")
 def home():
@@ -54,29 +52,43 @@ def oauth2callback():
         redirect_uri=REDIRECT_URI,
     )
     flow.fetch_token(code=request.args["code"])
-    creds_store["creds"] = flow.credentials
+
+    # ✅ STORE CREDS IN SESSION
+    session["creds"] = {
+        "token": flow.credentials.token,
+        "refresh_token": flow.credentials.refresh_token,
+        "token_uri": flow.credentials.token_uri,
+        "client_id": flow.credentials.client_id,
+        "client_secret": flow.credentials.client_secret,
+        "scopes": flow.credentials.scopes,
+    }
+
     return redirect(url_for("home"))
 
 @app.route("/sync", methods=["POST"])
 def sync():
-    creds = creds_store.get("creds")
-    if not creds:
+    if "creds" not in session:
         return "Not connected to Google yet."
 
-    service = build("calendar", "v3", credentials=creds)
+    creds = session["creds"]
+
+    service = build(
+        "calendar",
+        "v3",
+        credentials=Flow.from_client_config(
+            {"web": creds},
+            scopes=SCOPES
+        ).credentials
+    )
 
     start = datetime.datetime.utcnow()
     end = start + datetime.timedelta(minutes=30)
 
     event = {
         "summary": "Test Event from Deadline Sync",
-        "description": "This event was created by your app.",
         "start": {"dateTime": start.isoformat() + "Z"},
         "end": {"dateTime": end.isoformat() + "Z"},
     }
 
     service.events().insert(calendarId="primary", body=event).execute()
     return "Event created. Check your Google Calendar."
-
-if __name__ == "__main__":
-    app.run()
