@@ -109,3 +109,13 @@ def mark_event_status(event_id, status):
     conn.commit()
     conn.close()
 
+def get_event_by_id(event_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    row = cur.execute("""
+        SELECT id, gmail_message_id, title, description, start_time
+        FROM gmail_events
+        WHERE id = ?
+    """, (event_id,)).fetchone()
+    conn.close()
+    return row
