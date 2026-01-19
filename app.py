@@ -172,10 +172,12 @@ def sync():
         except:
             continue
 
+        sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
+
         save_gmail_event(
             gmail_id=m["id"],
             title=subject or "Gmail event",
-            description=body[:2000],
+            description=f"FROM: {sender}\n\n{body[:1800]}",
             start_time=when.isoformat(),
         )
         added += 1
@@ -193,18 +195,23 @@ def review():
 
     return f"""
     <h3>{title}</h3>
-    <p>{description[:500]}</p>
+
     <p><b>When:</b> {start_time}</p>
+
+    <p style="white-space: pre-wrap;">{description[:600]}</p>
 
     <form action="/accept/{event_id}" method="post" style="display:inline;">
         <button type="submit">✅ Add to Calendar</button>
     </form>
 
     <form action="/reject/{event_id}" method="post" style="display:inline;">
-        <button type="submit">❌ Ignore</button>
+        <button type="submit">❌ Skip</button>
     </form>
-    """
 
+    <p style="margin-top:20px;">
+      Reviewing pending Gmail events (one at a time)
+    </p>
+    """
 
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
