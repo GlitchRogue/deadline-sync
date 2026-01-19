@@ -16,8 +16,10 @@ from db import (
     load_creds,
     save_gmail_event,
     get_next_pending_event,
+    get_event_by_id,      # ← ADD THIS
     mark_event_status,
 )
+
 
 app = Flask(__name__)
 init_db()
