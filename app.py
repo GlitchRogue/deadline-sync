@@ -123,6 +123,7 @@ def sync():
     ).execute().get("messages", [])
 
     created = 0
+    skipped = 0
 
     for m in messages:
         msg = gmail.users().messages().get(
@@ -134,24 +135,34 @@ def sync():
         headers = msg["payload"]["headers"]
         subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
         body = extract_text(msg["payload"])
+        text = (subject + "\n" + body).strip()
 
-        if not re.search(r"(due|deadline)", subject + body, re.I):
+        # 1) loose filter (MVP)
+        if not re.search(r"(due|deadline|exam|interview|meeting|appointment|job fair)", text, re.I):
+            skipped += 1
             continue
 
-        date_match = re.search(r"\b(\w+ \d{1,2})\b", body)
+        # 2) find a date in common formats: "March 15", "Mar 15", "3/15", "3/15/2026"
+        date_match = re.search(
+            r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b)",
+            text,
+            re.I
+        )
         if not date_match:
+            skipped += 1
             continue
 
+        # 3) brute-force parse to datetime (no timezone perfection yet)
+        from dateutil import parser as dateparser
         try:
-            when = datetime.datetime.strptime(
-                date_match.group(1) + " " + str(datetime.datetime.now().year),
-                "%B %d %Y"
-            )
-        except:
+            when = dateparser.parse(date_match.group(1), fuzzy=True)
+        except Exception:
+            skipped += 1
             continue
 
+        # 4) create event (still no dedupe yet — we’ll add that next)
         event = {
-            "summary": subject[:100],
+            "summary": subject[:100] or "Gmail event",
             "description": body[:2000],
             "start": {"dateTime": when.isoformat()},
             "end": {"dateTime": (when + datetime.timedelta(hours=1)).isoformat()},
@@ -160,4 +171,4 @@ def sync():
         calendar.events().insert(calendarId="primary", body=event).execute()
         created += 1
 
-    return f"Created {created} events from Gmail."
+    return f"Created {created} events. Skipped {skipped} emails."
