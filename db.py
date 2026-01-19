@@ -71,3 +71,41 @@ def load_creds():
     """).fetchone()
     conn.close()
     return row
+
+def save_gmail_event(gmail_id, title, description, start_time):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT OR IGNORE INTO gmail_events
+        (gmail_message_id, title, description, start_time)
+        VALUES (?, ?, ?, ?)
+    """, (gmail_id, title, description, start_time))
+    conn.commit()
+    conn.close()
+
+
+def get_next_pending_event():
+    conn = get_conn()
+    cur = conn.cursor()
+    row = cur.execute("""
+        SELECT id, gmail_message_id, title, description, start_time
+        FROM gmail_events
+        WHERE status = 'pending'
+        ORDER BY id ASC
+        LIMIT 1
+    """).fetchone()
+    conn.close()
+    return row
+
+
+def mark_event_status(event_id, status):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE gmail_events
+        SET status = ?
+        WHERE id = ?
+    """, (status, event_id))
+    conn.commit()
+    conn.close()
+
