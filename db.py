@@ -8,6 +8,8 @@ def get_conn():
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
+
+    # Store Google OAuth credentials
     cur.execute("""
         CREATE TABLE IF NOT EXISTS google_creds (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -19,6 +21,19 @@ def init_db():
             scopes TEXT
         )
     """)
+
+    # Store extracted Gmail event candidates
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS gmail_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gmail_message_id TEXT UNIQUE,
+            title TEXT,
+            description TEXT,
+            start_time TEXT,
+            status TEXT DEFAULT 'pending'
+        )
+    """)
+
     conn.commit()
     conn.close()
 
