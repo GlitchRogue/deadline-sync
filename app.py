@@ -3,6 +3,7 @@ import datetime
 from flask import Flask, redirect, request, url_for, session
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", "dev-secret")
@@ -51,16 +52,17 @@ def oauth2callback():
         scopes=SCOPES,
         redirect_uri=REDIRECT_URI,
     )
-    flow.fetch_token(code=request.args["code"])
 
-    # ✅ STORE CREDS IN SESSION
+    flow.fetch_token(code=request.args["code"])
+    creds = flow.credentials
+
     session["creds"] = {
-        "token": flow.credentials.token,
-        "refresh_token": flow.credentials.refresh_token,
-        "token_uri": flow.credentials.token_uri,
-        "client_id": flow.credentials.client_id,
-        "client_secret": flow.credentials.client_secret,
-        "scopes": flow.credentials.scopes,
+        "token": creds.token,
+        "refresh_token": creds.refresh_token,
+        "token_uri": creds.token_uri,
+        "client_id": creds.client_id,
+        "client_secret": creds.client_secret,
+        "scopes": creds.scopes,
     }
 
     return redirect(url_for("home"))
@@ -70,25 +72,22 @@ def sync():
     if "creds" not in session:
         return "Not connected to Google yet."
 
-    creds = session["creds"]
+    creds = Credentials(**session["creds"])
 
-    service = build(
-        "calendar",
-        "v3",
-        credentials=Flow.from_client_config(
-            {"web": creds},
-            scopes=SCOPES
-        ).credentials
-    )
+    service = build("calendar", "v3", credentials=creds)
 
     start = datetime.datetime.utcnow()
     end = start + datetime.timedelta(minutes=30)
 
     event = {
         "summary": "Test Event from Deadline Sync",
+        "description": "Created by Deadline Sync",
         "start": {"dateTime": start.isoformat() + "Z"},
         "end": {"dateTime": end.isoformat() + "Z"},
     }
 
     service.events().insert(calendarId="primary", body=event).execute()
     return "Event created. Check your Google Calendar."
+
+if __name__ == "__main__":
+    app.run()
