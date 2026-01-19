@@ -1,26 +1,40 @@
-from flask import Flask, render_template_string
+import os
+from flask import Flask, redirect, request, url_for
+from google_auth_oauthlib.flow import Flow
 
 app = Flask(__name__)
+app.secret_key = os.environ["FLASK_SECRET"]
 
-HTML = """
-<!doctype html>
-<title>Deadline Sync</title>
-<h2>Deadline Sync MVP</h2>
-
-<form action="/sync" method="post">
-  <button type="submit">Sync now</button>
-</form>
-
-<p>{{ message }}</p>
-"""
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
+REDIRECT_URI = "https://YOUR-RENDER-URL/oauth2callback"
 
 @app.route("/")
 def home():
-    return render_template_string(HTML, message="")
+    return """
+    <h2>Deadline Sync</h2>
+    <a href="/connect">Connect Google Calendar</a>
+    """
 
-@app.route("/sync", methods=["POST"])
-def sync():
-    return render_template_string(HTML, message="Sync button works.")
+@app.route("/connect")
+def connect():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": os.environ["GOOGLE_CLIENT_ID"],
+                "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI,
+    )
+    auth_url, _ = flow.authorization_url(prompt="consent")
+    return redirect(auth_url)
+
+@app.route("/oauth2callback")
+def oauth2callback():
+    return "OAuth callback reached. Login worked."
 
 if __name__ == "__main__":
     app.run()
