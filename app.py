@@ -206,15 +206,16 @@ def review():
 
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
-    gmail, calendar = get_services()
+    _, calendar = get_services()
     if not calendar:
         return "Not connected."
 
-    event = get_next_pending_event()
+    event = get_event_by_id(event_id)
     if not event:
         return redirect(url_for("review"))
 
     _, _, title, description, start_time = event
+
     start = dateparser.parse(start_time)
     end = start + datetime.timedelta(hours=1)
 
