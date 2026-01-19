@@ -182,7 +182,14 @@ def sync():
         )
         added += 1
 
-    return f"Saved {added} event candidates. Go to /review."
+    return f"""
+    <h3>Scan complete</h3>
+
+    <p>Saved <b>{added}</b> event candidates.</p>
+
+    <a href="/review">🧾 Review events</a><br><br>
+    <a href="/">⬅ Back to Home</a>
+    """
 
 
 @app.route("/review")
@@ -193,8 +200,8 @@ def review():
         return """
         <h3>No pending events 🎉</h3>
 
-        <a href="/">⬅ Back to Home</a><br><br>
-        <a href="/sync">🔄 Scan Gmail again</a>
+        <a href="/sync">🔄 Scan Gmail again</a><br><br>
+        <a href="/">⬅ Back to Home</a>
         """
 
     event_id, gmail_id, title, description, start_time = event
@@ -216,13 +223,10 @@ def review():
 
     <hr>
 
-    <p>
-      Reviewing pending Gmail events (one at a time)
-    </p>
+    <p>Reviewing Gmail events (one at a time)</p>
 
     <a href="/">⬅ Back to Home</a>
     """
-
 
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
