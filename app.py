@@ -175,7 +175,7 @@ def sync():
         }
 
 
-        calendar.events().insert(calendarId="primary", body=event).execute()
+        save_event_candidate(...).execute()
         created += 1
 
     return f"Created {created} events. Skipped {skipped} emails."
