@@ -189,7 +189,12 @@ def sync():
 def review():
     event = get_next_pending_event()
     if not event:
-        return "No pending events 🎉"
+    return """
+    <h3>No pending events 🎉</h3>
+
+    <a href="/">⬅ Back to Home</a><br><br>
+    <a href="/sync">🔄 Scan Gmail again</a>
+    """
 
     event_id, gmail_id, title, description, start_time = event
 
@@ -208,10 +213,15 @@ def review():
         <button type="submit">❌ Skip</button>
     </form>
 
-    <p style="margin-top:20px;">
+    <hr>
+
+    <p>
       Reviewing pending Gmail events (one at a time)
     </p>
+
+    <a href="/">⬅ Back to Home</a>
     """
+
 
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
