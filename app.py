@@ -164,9 +164,16 @@ def sync():
         event = {
             "summary": subject[:100] or "Gmail event",
             "description": body[:2000],
-            "start": {"dateTime": when.isoformat()},
-            "end": {"dateTime": (when + datetime.timedelta(hours=1)).isoformat()},
+            "start": {
+                "dateTime": when.isoformat(),
+                "timeZone": "UTC",
+            },
+            "end": {
+                "dateTime": (when + datetime.timedelta(hours=1)).isoformat(),
+                "timeZone": "UTC",
+            },
         }
+
 
         calendar.events().insert(calendarId="primary", body=event).execute()
         created += 1
