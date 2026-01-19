@@ -6,6 +6,10 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
 app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
+)
 app.secret_key = os.environ.get("FLASK_SECRET", "dev-secret")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
