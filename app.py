@@ -47,6 +47,9 @@ def connect():
 @app.route("/oauth2callback")
 def oauth2callback():
     global GOOGLE_CREDS
+    GOOGLE_CREDS = "SET"
+    return "CALLBACK HIT – creds set"
+    global GOOGLE_CREDS
 
     flow = Flow.from_client_config(
         {
@@ -68,6 +71,7 @@ def oauth2callback():
 
 @app.route("/sync", methods=["POST"])
 def sync():
+    return f"SYNC HIT – creds = {GOOGLE_CREDS}"
     if GOOGLE_CREDS is None:
         return "Not connected to Google yet."
 
