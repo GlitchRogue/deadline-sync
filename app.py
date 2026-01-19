@@ -1,5 +1,8 @@
 import os
 import datetime
+import base64
+import re
+
 from flask import Flask, redirect, request, url_for
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -9,11 +12,13 @@ from google.auth.transport.requests import Request
 from db import init_db, save_creds, load_creds
 
 app = Flask(__name__)
-
-# initialize sqlite once at startup
 init_db()
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
+
 REDIRECT_URI = "https://deadline-sync.onrender.com/oauth2callback"
 
 
@@ -21,9 +26,9 @@ REDIRECT_URI = "https://deadline-sync.onrender.com/oauth2callback"
 def home():
     return """
     <h2>Deadline Sync</h2>
-    <a href="/connect">Connect Google Calendar</a>
+    <a href="/connect">Connect Google</a>
     <form action="/sync" method="post">
-      <button type="submit">Create test event</button>
+      <button type="submit">Sync Gmail → Calendar</button>
     </form>
     """
 
@@ -45,7 +50,7 @@ def connect():
 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
-        prompt="consent"
+        prompt="consent",
     )
     return redirect(auth_url)
 
@@ -66,18 +71,14 @@ def oauth2callback():
     )
 
     flow.fetch_token(code=request.args["code"])
-
-    # ✅ persist creds in sqlite
     save_creds(flow.credentials)
-
     return redirect(url_for("home"))
 
 
-@app.route("/sync", methods=["POST"])
-def sync():
+def get_services():
     row = load_creds()
     if not row:
-        return "Not connected to Google yet."
+        return None, None
 
     creds = Credentials(
         token=row[0],
@@ -88,23 +89,75 @@ def sync():
         scopes=row[5].split(),
     )
 
-    # ✅ THIS IS THE IMPORTANT PART YOU WERE ASKING ABOUT
-    # auto-refresh token after redeploy / expiration
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
         save_creds(creds)
 
-    service = build("calendar", "v3", credentials=creds)
+    gmail = build("gmail", "v1", credentials=creds)
+    calendar = build("calendar", "v3", credentials=creds)
+    return gmail, calendar
 
-    start = datetime.datetime.utcnow()
-    end = start + datetime.timedelta(minutes=30)
 
-    event = {
-        "summary": "Test Event from Deadline Sync",
-        "description": "Token refresh + persistence works.",
-        "start": {"dateTime": start.isoformat() + "Z"},
-        "end": {"dateTime": end.isoformat() + "Z"},
-    }
+def extract_text(payload):
+    if "parts" in payload:
+        for part in payload["parts"]:
+            if part["mimeType"] == "text/plain":
+                data = part["body"].get("data")
+                if data:
+                    return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+    data = payload["body"].get("data")
+    if data:
+        return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+    return ""
 
-    service.events().insert(calendarId="primary", body=event).execute()
-    return "Event created. Check Google Calendar."
+
+@app.route("/sync", methods=["POST"])
+def sync():
+    gmail, calendar = get_services()
+    if not gmail:
+        return "Not connected."
+
+    messages = gmail.users().messages().list(
+        userId="me",
+        maxResults=20
+    ).execute().get("messages", [])
+
+    created = 0
+
+    for m in messages:
+        msg = gmail.users().messages().get(
+            userId="me",
+            id=m["id"],
+            format="full"
+        ).execute()
+
+        headers = msg["payload"]["headers"]
+        subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+        body = extract_text(msg["payload"])
+
+        if not re.search(r"(due|deadline)", subject + body, re.I):
+            continue
+
+        date_match = re.search(r"\b(\w+ \d{1,2})\b", body)
+        if not date_match:
+            continue
+
+        try:
+            when = datetime.datetime.strptime(
+                date_match.group(1) + " " + str(datetime.datetime.now().year),
+                "%B %d %Y"
+            )
+        except:
+            continue
+
+        event = {
+            "summary": subject[:100],
+            "description": body[:2000],
+            "start": {"dateTime": when.isoformat()},
+            "end": {"dateTime": (when + datetime.timedelta(hours=1)).isoformat()},
+        }
+
+        calendar.events().insert(calendarId="primary", body=event).execute()
+        created += 1
+
+    return f"Created {created} events from Gmail."
