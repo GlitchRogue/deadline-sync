@@ -4,14 +4,18 @@ from flask import Flask, redirect, request, url_for
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+
 from db import init_db, save_creds, load_creds
 
 app = Flask(__name__)
 
+# initialize sqlite once at startup
 init_db()
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 REDIRECT_URI = "https://deadline-sync.onrender.com/oauth2callback"
+
 
 @app.route("/")
 def home():
@@ -22,6 +26,7 @@ def home():
       <button type="submit">Create test event</button>
     </form>
     """
+
 
 @app.route("/connect")
 def connect():
@@ -44,10 +49,9 @@ def connect():
     )
     return redirect(auth_url)
 
+
 @app.route("/oauth2callback")
 def oauth2callback():
-    global GOOGLE_CREDS
-
     flow = Flow.from_client_config(
         {
             "web": {
@@ -62,9 +66,12 @@ def oauth2callback():
     )
 
     flow.fetch_token(code=request.args["code"])
+
+    # ✅ persist creds in sqlite
     save_creds(flow.credentials)
 
     return redirect(url_for("home"))
+
 
 @app.route("/sync", methods=["POST"])
 def sync():
@@ -81,6 +88,12 @@ def sync():
         scopes=row[5].split(),
     )
 
+    # ✅ THIS IS THE IMPORTANT PART YOU WERE ASKING ABOUT
+    # auto-refresh token after redeploy / expiration
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        save_creds(creds)
+
     service = build("calendar", "v3", credentials=creds)
 
     start = datetime.datetime.utcnow()
@@ -88,11 +101,10 @@ def sync():
 
     event = {
         "summary": "Test Event from Deadline Sync",
-        "description": "If you see this, persistence WORKS.",
+        "description": "Token refresh + persistence works.",
         "start": {"dateTime": start.isoformat() + "Z"},
         "end": {"dateTime": end.isoformat() + "Z"},
     }
 
     service.events().insert(calendarId="primary", body=event).execute()
     return "Event created. Check Google Calendar."
-
