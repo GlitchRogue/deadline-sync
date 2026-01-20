@@ -156,9 +156,38 @@ def sync():
         text = subject + "\n" + body
 
         # very loose MVP filter
-        if not re.search(r"(event|ticket|rsvp|due|deadline|meetup|concert)", text, re.I):
-            continue
+        sender = next((h["value"] for h in headers if h["name"] == "From"), "").lower()
+        subject_lower = subject.lower()
 
+        likely_event = (
+            any(x in sender for x in [
+                "eventbrite",
+                "meetup",
+                "tickets",
+                "universe",
+                "calendar",
+                "events",
+        ])
+        or any(x in subject_lower for x in [
+            "you're registered",
+            "your ticket",
+            "event reminder",
+            "rsvp",
+            "invitation",
+        ])
+    )
+
+    if not likely_event:
+        continue
+
+        # 2️⃣ REQUIRE A TIME (this kills newsletters)
+    if not re.search(
+        r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b",
+        text,
+        re.I
+    ):
+        continue
+        
         date_match = re.search(
             r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b)",
             text,
