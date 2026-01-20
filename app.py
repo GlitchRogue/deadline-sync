@@ -155,10 +155,10 @@ def sync():
         body = extract_text(msg["payload"])
         text = subject + "\n" + body
 
-        # very loose MVP filter
         sender = next((h["value"] for h in headers if h["name"] == "From"), "").lower()
         subject_lower = subject.lower()
 
+        # 1️⃣ sender / subject relevance filter
         likely_event = (
             any(x in sender for x in [
                 "eventbrite",
@@ -167,27 +167,28 @@ def sync():
                 "universe",
                 "calendar",
                 "events",
-        ])
-        or any(x in subject_lower for x in [
-            "you're registered",
-            "your ticket",
-            "event reminder",
-            "rsvp",
-            "invitation",
-        ])
-    )
+            ])
+            or any(x in subject_lower for x in [
+                "you're registered",
+                "your ticket",
+                "event reminder",
+                "rsvp",
+                "invitation",
+            ])
+        )
 
-    if not likely_event:
-        continue
+        if not likely_event:
+            continue
 
-        # 2️⃣ REQUIRE A TIME (this kills newsletters)
-    if not re.search(
-        r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b",
-        text,
-        re.I
-    ):
-        continue
-        
+        # 2️⃣ REQUIRE A TIME (kills newsletters)
+        if not re.search(
+            r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b",
+            text,
+            re.I
+        ):
+            continue
+
+        # 3️⃣ DATE extraction
         date_match = re.search(
             r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b)",
             text,
@@ -201,24 +202,22 @@ def sync():
         except:
             continue
 
-        sender = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
-
         save_gmail_event(
             gmail_id=m["id"],
             title=subject or "Gmail event",
-            description=f"FROM: {sender}\n\n{body[:1800]}",
+            description=body[:2000],
             start_time=when.isoformat(),
         )
+
         added += 1
 
     return f"""
     <h3>Scan complete</h3>
-
     <p>Saved <b>{added}</b> event candidates.</p>
-
     <a href="/review">🧾 Review events</a><br><br>
     <a href="/">⬅ Back to Home</a>
     """
+
 
 
 @app.route("/review")
