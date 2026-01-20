@@ -228,6 +228,7 @@ def review():
     <a href="/">⬅ Back to Home</a>
     """
 
+
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
     _, calendar = get_services()
@@ -253,7 +254,15 @@ def accept(event_id):
     calendar.events().insert(calendarId="primary", body=cal_event).execute()
     mark_event_status(event_id, "accepted")
 
-    return redirect(url_for("review"))
+    return f"""
+    <h3>✅ Event added to Google Calendar</h3>
+
+    <p><b>{title}</b></p>
+    <p>{start_time}</p>
+
+    <a href="/review">➡ Review next event</a><br><br>
+    <a href="/">⬅ Back to Home</a>
+    """
 
 
 @app.route("/reject/<int:event_id>", methods=["POST"])
