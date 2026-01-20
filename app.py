@@ -267,6 +267,21 @@ def accept(event_id):
 
 @app.route("/reject/<int:event_id>", methods=["POST"])
 def reject(event_id):
+    event = get_event_by_id(event_id)
+    if not event:
+        return redirect(url_for("review"))
+
+    _, _, title, _, start_time = event
+
     mark_event_status(event_id, "rejected")
-    return redirect(url_for("review"))
+
+    return f"""
+    <h3>❌ Event skipped</h3>
+
+    <p><b>{title}</b></p>
+    <p>{start_time}</p>
+
+    <a href="/review">➡ Review next event</a><br><br>
+    <a href="/">⬅ Back to Home</a>
+    """
 
