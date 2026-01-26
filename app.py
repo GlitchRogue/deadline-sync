@@ -1,9 +1,5 @@
-import json
-from openai import OpenAI
-
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
 import os
+import json
 import datetime
 import base64
 import re
@@ -14,6 +10,7 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from dateutil import parser as dateparser
+from openai import OpenAI
 
 from db import (
     init_db,
@@ -21,13 +18,16 @@ from db import (
     load_creds,
     save_gmail_event,
     get_next_pending_event,
-    get_event_by_id,      # ← ADD THIS
+    get_event_by_id,
     mark_event_status,
 )
 
+# -------------------- APP SETUP --------------------
 
 app = Flask(__name__)
 init_db()
+
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -35,7 +35,6 @@ SCOPES = [
 ]
 
 REDIRECT_URI = "https://deadline-sync.onrender.com/oauth2callback"
-
 
 # -------------------- HELPERS --------------------
 
@@ -74,6 +73,42 @@ def extract_text(payload):
         return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
     return ""
 
+
+def ai_extract_event(subject, body):
+    prompt = f"""
+You extract events from emails.
+
+Return ONLY valid JSON.
+
+If the email is not an event:
+{{"is_event": false}}
+
+If it IS an event:
+{{
+  "is_event": true,
+  "title": "...",
+  "summary": "...",
+  "start_time": "ISO8601",
+  "location": "..."
+}}
+
+Email subject:
+{subject}
+
+Email body:
+{body[:3000]}
+"""
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+
+    try:
+        return json.loads(resp.choices[0].message.content)
+    except:
+        return None
 
 # -------------------- ROUTES --------------------
 
@@ -143,11 +178,12 @@ def sync():
 
     messages = gmail.users().messages().list(
         userId="me",
-        maxResults=20
+        maxResults=50
     ).execute().get("messages", [])
 
     added = 0
 
+    # ---------- DETERMINISTIC SCAN ----------
     for m in messages:
         msg = gmail.users().messages().get(
             userId="me",
@@ -163,29 +199,18 @@ def sync():
         sender = next((h["value"] for h in headers if h["name"] == "From"), "").lower()
         subject_lower = subject.lower()
 
-        # 1️⃣ sender / subject relevance filter
         likely_event = (
             any(x in sender for x in [
-                "eventbrite",
-                "meetup",
-                "tickets",
-                "universe",
-                "calendar",
-                "events",
+                "eventbrite", "meetup", "tickets", "universe", "calendar", "events"
             ])
             or any(x in subject_lower for x in [
-                "you're registered",
-                "your ticket",
-                "event reminder",
-                "rsvp",
-                "invitation",
+                "you're registered", "your ticket", "event reminder", "rsvp", "invitation"
             ])
         )
 
         if not likely_event:
             continue
 
-        # 2️⃣ REQUIRE A TIME (kills newsletters)
         if not re.search(
             r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b",
             text,
@@ -193,9 +218,8 @@ def sync():
         ):
             continue
 
-        # 3️⃣ DATE extraction
         date_match = re.search(
-            r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b)",
+            r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2})",
             text,
             re.I
         )
@@ -209,12 +233,40 @@ def sync():
 
         save_gmail_event(
             gmail_id=m["id"],
-            title=subject or "Gmail event",
+            title=subject,
+            summary=None,
             description=body[:2000],
             start_time=when.isoformat(),
+            location=None,
         )
-
         added += 1
+
+    # ---------- AI FALLBACK ----------
+    if added == 0:
+        for m in messages[:10]:
+            msg = gmail.users().messages().get(
+                userId="me",
+                id=m["id"],
+                format="full"
+            ).execute()
+
+            headers = msg["payload"]["headers"]
+            subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+            body = extract_text(msg["payload"])
+
+            ai = ai_extract_event(subject, body)
+            if not ai or not ai.get("is_event") or not ai.get("start_time"):
+                continue
+
+            save_gmail_event(
+                gmail_id=m["id"],
+                title=ai["title"],
+                summary=ai["summary"],
+                description=body[:2000],
+                start_time=ai["start_time"],
+                location=ai.get("location"),
+            )
+            added += 1
 
     return f"""
     <h3>Scan complete</h3>
@@ -224,39 +276,29 @@ def sync():
     """
 
 
-
 @app.route("/review")
 def review():
     event = get_next_pending_event()
-
     if not event:
         return """
         <h3>No pending events 🎉</h3>
-
-        <a href="/sync">🔄 Scan Gmail again</a><br><br>
         <a href="/">⬅ Back to Home</a>
         """
 
-    event_id, gmail_id, title, description, start_time = event
+    event_id, gmail_id, title, summary, description, start_time, location = event
 
     return f"""
     <h3>{title}</h3>
-
     <p><b>When:</b> {start_time}</p>
+    <p>{summary or description[:600]}</p>
 
-    <p style="white-space: pre-wrap;">{description[:600]}</p>
-
-    <form action="/accept/{event_id}" method="post" style="display:inline;">
+    <form action="/accept/{event_id}" method="post">
         <button type="submit">✅ Add to Calendar</button>
     </form>
 
-    <form action="/reject/{event_id}" method="post" style="display:inline;">
+    <form action="/reject/{event_id}" method="post">
         <button type="submit">❌ Skip</button>
     </form>
-
-    <hr>
-
-    <p>Reviewing Gmail events (one at a time)</p>
 
     <a href="/">⬅ Back to Home</a>
     """
@@ -265,91 +307,36 @@ def review():
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
     _, calendar = get_services()
-    if not calendar:
-        return "Not connected."
-
     event = get_event_by_id(event_id)
-    if not event:
+    if not calendar or not event:
         return redirect(url_for("review"))
 
-    _, _, title, description, start_time = event
+    _, _, title, summary, description, start_time, _ = event
 
     start = dateparser.parse(start_time)
     end = start + datetime.timedelta(hours=1)
 
-    cal_event = {
-        "summary": f"[Gmail] {title}",
-        "description": description,
-        "start": {"dateTime": start.isoformat(), "timeZone": "UTC"},
-        "end": {"dateTime": end.isoformat(), "timeZone": "UTC"},
-    }
+    calendar.events().insert(
+        calendarId="primary",
+        body={
+            "summary": title,
+            "description": summary or description,
+            "start": {"dateTime": start.isoformat(), "timeZone": "UTC"},
+            "end": {"dateTime": end.isoformat(), "timeZone": "UTC"},
+        }
+    ).execute()
 
-    calendar.events().insert(calendarId="primary", body=cal_event).execute()
     mark_event_status(event_id, "accepted")
 
-    return f"""
-    <h3>✅ Event added to Google Calendar</h3>
-
-    <p><b>{title}</b></p>
-    <p>{start_time}</p>
-
-    <a href="/review">➡ Review next event</a><br><br>
-    <a href="/">⬅ Back to Home</a>
+    return """
+    <h3>✅ Event added</h3>
+    <a href="/review">Review next</a><br>
+    <a href="/">Home</a>
     """
 
-def ai_extract_event(subject, body):
-    prompt = f"""
-You extract events from emails.
-
-Return ONLY valid JSON.
-
-If the email is not an event, return:
-{{"is_event": false}}
-
-If it IS an event, return:
-{{
-  "is_event": true,
-  "title": "...",
-  "summary": "...",
-  "start_time": "ISO8601",
-  "location": "..."
-}}
-
-Email subject:
-{subject}
-
-Email body:
-{body[:3000]}
-"""
-
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-
-    try:
-        return json.loads(resp.choices[0].message.content)
-    except:
-        return None
 
 @app.route("/reject/<int:event_id>", methods=["POST"])
 def reject(event_id):
-    event = get_event_by_id(event_id)
-    if not event:
-        return redirect(url_for("review"))
-
-    _, _, title, _, start_time = event
-
     mark_event_status(event_id, "rejected")
-
-    return f"""
-    <h3>❌ Event skipped</h3>
-
-    <p><b>{title}</b></p>
-    <p>{start_time}</p>
-
-    <a href="/review">➡ Review next event</a><br><br>
-    <a href="/">⬅ Back to Home</a>
-    """
+    return redirect(url_for("review"))
 
