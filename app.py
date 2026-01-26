@@ -1,3 +1,8 @@
+import json
+from openai import OpenAI
+
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 import os
 import datetime
 import base64
@@ -292,6 +297,41 @@ def accept(event_id):
     <a href="/">⬅ Back to Home</a>
     """
 
+def ai_extract_event(subject, body):
+    prompt = f"""
+You extract events from emails.
+
+Return ONLY valid JSON.
+
+If the email is not an event, return:
+{{"is_event": false}}
+
+If it IS an event, return:
+{{
+  "is_event": true,
+  "title": "...",
+  "summary": "...",
+  "start_time": "ISO8601",
+  "location": "..."
+}}
+
+Email subject:
+{subject}
+
+Email body:
+{body[:3000]}
+"""
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+
+    try:
+        return json.loads(resp.choices[0].message.content)
+    except:
+        return None
 
 @app.route("/reject/<int:event_id>", methods=["POST"])
 def reject(event_id):
