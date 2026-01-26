@@ -28,11 +28,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             gmail_message_id TEXT UNIQUE,
             title TEXT,
+            summary TEXT,
             description TEXT,
             start_time TEXT,
+            location TEXT,
             status TEXT DEFAULT 'pending'
         )
     """)
+
 
     conn.commit()
     conn.close()
@@ -72,14 +75,15 @@ def load_creds():
     conn.close()
     return row
 
-def save_gmail_event(gmail_id, title, description, start_time):
+def save_gmail_event(gmail_id, title, summary, description, start_time, location=None):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         INSERT OR IGNORE INTO gmail_events
-        (gmail_message_id, title, description, start_time)
-        VALUES (?, ?, ?, ?)
-    """, (gmail_id, title, description, start_time))
+        (gmail_message_id, title, summary, description, start_time, location)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (gmail_id, title, summary, description, start_time, location))
+
     conn.commit()
     conn.close()
 
