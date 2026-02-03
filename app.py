@@ -10,7 +10,10 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from dateutil import parser as dateparser
+from dateutil import tz
 from openai import OpenAI
+from dateutil import tz
+
 
 from db import (
     init_db,
@@ -37,6 +40,78 @@ SCOPES = [
 REDIRECT_URI = "https://deadline-sync.onrender.com/oauth2callback"
 
 # -------------------- HELPERS --------------------
+USER_TZ = tz.gettz("America/New_York")
+
+NEGATIVE_HINTS = [
+    "unsubscribe", "newsletter", "sale", "promo", "promotion", "marketing",
+    "deal", "discount", "save", "offer", "new arrivals"
+]
+
+POSITIVE_HINTS = [
+    "appointment", "scheduled", "reminder", "service", "pickup", "pick up",
+    "ready for pickup", "order is ready", "reservation", "booking",
+    "delivery", "arriving", "out for delivery", "delivery window",
+    "bill due", "payment due", "due date", "deadline", "renewal",
+    "inspection", "checkup", "installation", "estimate"
+]
+
+def normalize_dt(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=USER_TZ)
+    return dt
+
+def parse_first_datetime(text):
+    """
+    Try to find a usable datetime.
+    - If we find a date+time, use it.
+    - If only date, default to 9:00 AM local to avoid dropping obvious events.
+    """
+    # Try dateparser fuzzy on a smaller chunk to avoid garbage matches
+    try:
+        dt = dateparser.parse(text, fuzzy=True)
+        if dt:
+            dt = normalize_dt(dt)
+            return dt
+    except:
+        return None
+    return None
+
+def looks_like_event(subject, sender, body):
+    t = (subject + "\n" + body).lower()
+
+    # Hard block obvious marketing
+    if any(x in t for x in NEGATIVE_HINTS):
+        return False, 0
+
+    score = 0
+    if any(x in t for x in POSITIVE_HINTS):
+        score += 2
+
+    # Common “real world” signals
+    if re.search(r"\b(appointment|scheduled|reminder|reservation|pickup|delivery|due)\b", t):
+        score += 2
+
+    # Time or date patterns increase score
+    if re.search(r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b", t, re.I):
+        score += 1
+
+    if re.search(r"\b(\d{1,2}/\d{1,2}(/\d{2,4})?)\b", t) or re.search(
+        r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b",
+        t, re.I
+    ):
+        score += 1
+
+    # Sender/subject “ticket” sources still count
+    sender_l = (sender or "").lower()
+    subject_l = (subject or "").lower()
+    if any(x in sender_l for x in ["eventbrite", "meetup", "universe", "tickets"]):
+        score += 2
+    if any(x in subject_l for x in ["you're registered", "your ticket", "rsvp", "invitation"]):
+        score += 2
+
+    return score >= 3, score
 
 def get_services():
     row = load_creds()
@@ -75,33 +150,46 @@ def extract_text(payload):
 
 
 def ai_extract_event(subject, body):
+    # Keep it short and force constraints.
     prompt = f"""
-You extract events from emails.
+You extract calendar-worthy events or deadlines from an email.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON. No markdown. No commentary.
 
-If the email is not an event:
-{{"is_event": false}}
+Rules:
+- If NOT an event/deadline/appointment/reminder: {{"is_event": false}}
+- If it IS relevant: set is_event=true and fill fields.
+- start_time MUST be RFC3339 / ISO8601 with timezone offset (e.g. 2026-02-03T09:00:00-05:00).
+- If the email gives a DATE but NO TIME, choose 09:00 local time and set all_day=false.
+- Summary should be 1 sentence, concrete, no fluff.
+- Title should be short and specific (e.g. "Package pickup - UPS Store", "Oil change appointment").
+- confidence is 0..1.
 
-If it IS an event:
+Output schema when is_event=true:
 {{
   "is_event": true,
   "title": "...",
   "summary": "...",
-  "start_time": "ISO8601",
-  "location": "..."
+  "start_time": "...",
+  "end_time": null,
+  "all_day": false,
+  "location": null,
+  "confidence": 0.0
 }}
 
 Email subject:
 {subject}
 
-Email body:
-{body[:3000]}
+Email body (truncated):
+{body[:2500]}
 """
 
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": "You are a strict information extractor."},
+            {"role": "user", "content": prompt},
+        ],
         temperature=0,
     )
 
@@ -109,23 +197,6 @@ Email body:
         return json.loads(resp.choices[0].message.content)
     except:
         return None
-
-# -------------------- ROUTES --------------------
-
-@app.route("/")
-def home():
-    return """
-    <h2>Deadline Sync</h2>
-
-    <a href="/connect">Connect Google</a><br><br>
-
-    <form action="/sync" method="post">
-      <button type="submit">Scan Gmail for events</button>
-    </form>
-
-    <br>
-    <a href="/review">Review pending events</a>
-    """
 
 
 @app.route("/connect")
@@ -178,12 +249,13 @@ def sync():
 
     messages = gmail.users().messages().list(
         userId="me",
-        maxResults=50
+        maxResults=50,
+        q="newer_than:14d"
     ).execute().get("messages", [])
 
     added = 0
+    now = datetime.datetime.now(tz=USER_TZ)
 
-    # ---------- DETERMINISTIC SCAN ----------
     for m in messages:
         msg = gmail.users().messages().get(
             userId="me",
@@ -193,89 +265,115 @@ def sync():
 
         headers = msg["payload"]["headers"]
         subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+        sender = next((h["value"] for h in headers if h["name"] == "From"), "")
         body = extract_text(msg["payload"])
+
+        ok, score = looks_like_event(subject, sender, body)
+        if not ok:
+            continue
+
         text = subject + "\n" + body
 
-        sender = next((h["value"] for h in headers if h["name"] == "From"), "").lower()
-        subject_lower = subject.lower()
+        # Try to parse a datetime deterministically
+        dt = None
 
-        likely_event = (
-            any(x in sender for x in [
-                "eventbrite", "meetup", "tickets", "universe", "calendar", "events"
-            ])
-            or any(x in subject_lower for x in [
-                "you're registered", "your ticket", "event reminder", "rsvp", "invitation"
-            ])
-        )
-
-        if not likely_event:
-            continue
-
-        if not re.search(
-            r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b",
-            text,
-            re.I
-        ):
-            continue
-
-        date_match = re.search(
-            r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2})",
+        # Prefer explicit date-like snippets when present
+        date_snip = re.search(
+            r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}(/\d{2,4})?\b)",
             text,
             re.I
         )
-        if not date_match:
+        if date_snip:
+            try:
+                dt = dateparser.parse(date_snip.group(1), fuzzy=True)
+                dt = normalize_dt(dt)
+                # If no time found anywhere, default to 9am
+                if dt and not re.search(r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b", text, re.I):
+                    dt = dt.replace(hour=9, minute=0, second=0, microsecond=0)
+            except:
+                dt = None
+
+        # If we still don't have dt, try fuzzy parse on subject first (often contains date)
+        if not dt:
+            dt = parse_first_datetime(subject)
+
+        # Filter: only future-ish, avoid ancient junk
+        if not dt:
+            # We'll let AI handle it for strong candidates later
             continue
 
-        try:
-            when = dateparser.parse(date_match.group(1), fuzzy=True)
-        except:
+        if dt < now - datetime.timedelta(days=1):
+            continue
+        if dt > now + datetime.timedelta(days=180):
             continue
 
         save_gmail_event(
             gmail_id=m["id"],
-            title=subject,
+            title=subject.strip()[:180] or "Event",
             summary=None,
             description=body[:2000],
-            start_time=when.isoformat(),
+            start_time=dt.isoformat(),
             location=None,
+            confidence=min(0.9, 0.5 + (score * 0.1)),
+            raw=None
         )
         added += 1
 
-    # ---------- AI FALLBACK ----------
-    if added == 0:
-        for m in messages[:10]:
-            msg = gmail.users().messages().get(
-                userId="me",
-                id=m["id"],
-                format="full"
-            ).execute()
+    # ---------- AI ENRICHMENT / FALLBACK ----------
+    # Run AI on a small set of strong-looking emails where deterministic failed to add anything.
+    # This catches package pickup, service reminders, reservations, etc.
+    scanned_ai = 0
+    for m in messages[:15]:
+        if scanned_ai >= 8:
+            break
 
-            headers = msg["payload"]["headers"]
-            subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
-            body = extract_text(msg["payload"])
+        msg = gmail.users().messages().get(
+            userId="me",
+            id=m["id"],
+            format="full"
+        ).execute()
 
-            ai = ai_extract_event(subject, body)
-            if not ai or not ai.get("is_event") or not ai.get("start_time"):
-                continue
+        headers = msg["payload"]["headers"]
+        subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+        sender = next((h["value"] for h in headers if h["name"] == "From"), "")
+        body = extract_text(msg["payload"])
 
-            save_gmail_event(
-                gmail_id=m["id"],
-                title=ai["title"],
-                summary=ai["summary"],
-                description=body[:2000],
-                start_time=ai["start_time"],
-                location=ai.get("location"),
-            )
-            added += 1
+        ok, score = looks_like_event(subject, sender, body)
+        if not ok or score < 4:
+            continue
 
-    return f"""
-    <h3>Scan complete</h3>
-    <p>Saved <b>{added}</b> event candidates.</p>
-    <a href="/review">🧾 Review events</a><br><br>
-    <a href="/">⬅ Back to Home</a>
-    """
+        ai = ai_extract_event(subject, body)
+        scanned_ai += 1
 
+        if not ai or not ai.get("is_event") or not ai.get("start_time"):
+            continue
 
+        # Basic sanity: parse AI datetime
+        try:
+            dt = normalize_dt(dateparser.parse(ai["start_time"]))
+        except:
+            continue
+
+        if not dt:
+            continue
+
+        if dt < now - datetime.timedelta(days=1) or dt > now + datetime.timedelta(days=180):
+            continue
+
+        save_gmail_event(
+            gmail_id=m["id"],
+            title=(ai.get("title") or subject).strip()[:180],
+            summary=(ai.get("summary") or None),
+            description=body[:2000],
+            start_time=dt.isoformat(),
+            end_time=ai.get("end_time"),
+            all_day=1 if ai.get("all_day") else 0,
+            location=ai.get("location"),
+            confidence=float(ai.get("confidence") or 0.6),
+            raw=json.dumps(ai)
+        )
+        added += 1
+        
 @app.route("/review")
 def review():
     event = get_next_pending_event()
@@ -285,18 +383,26 @@ def review():
         <a href="/">⬅ Back to Home</a>
         """
 
-    event_id, gmail_id, title, summary, description, start_time, location = event
+    title = event.get("title") or "Untitled"
+    when = event.get("start_time") or "Unknown"
+    summary = event.get("summary")
+    description = event.get("description") or ""
+    location = event.get("location")
+
+    body_text = summary or description[:600]
+    loc_line = f"<p><b>Where:</b> {location}</p>" if location else ""
 
     return f"""
     <h3>{title}</h3>
-    <p><b>When:</b> {start_time}</p>
-    <p>{summary or description[:600]}</p>
+    <p><b>When:</b> {when}</p>
+    {loc_line}
+    <p>{body_text}</p>
 
-    <form action="/accept/{event_id}" method="post">
+    <form action="/accept/{event['id']}" method="post">
         <button type="submit">✅ Add to Calendar</button>
     </form>
 
-    <form action="/reject/{event_id}" method="post">
+    <form action="/reject/{event['id']}" method="post">
         <button type="submit">❌ Skip</button>
     </form>
 
@@ -311,28 +417,32 @@ def accept(event_id):
     if not calendar or not event:
         return redirect(url_for("review"))
 
-    _, _, title, summary, description, start_time, _ = event
+    title = event.get("title") or "Event"
+    summary = event.get("summary")
+    description = event.get("description") or ""
+    location = event.get("location")
 
-    start = dateparser.parse(start_time)
+    start = normalize_dt(dateparser.parse(event["start_time"]))
+    if not start:
+        mark_event_status(event_id, "rejected")
+        return redirect(url_for("review"))
+
+    # Default duration: 1 hour unless you later add end_time
     end = start + datetime.timedelta(hours=1)
 
     calendar.events().insert(
         calendarId="primary",
         body={
             "summary": title,
+            "location": location,
             "description": summary or description,
-            "start": {"dateTime": start.isoformat(), "timeZone": "UTC"},
-            "end": {"dateTime": end.isoformat(), "timeZone": "UTC"},
+            "start": {"dateTime": start.isoformat(), "timeZone": "America/New_York"},
+            "end": {"dateTime": end.isoformat(), "timeZone": "America/New_York"},
         }
     ).execute()
 
     mark_event_status(event_id, "accepted")
-
-    return """
-    <h3>✅ Event added</h3>
-    <a href="/review">Review next</a><br>
-    <a href="/">Home</a>
-    """
+    return redirect(url_for("review"))
 
 
 @app.route("/reject/<int:event_id>", methods=["POST"])
