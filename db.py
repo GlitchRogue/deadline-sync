@@ -1,15 +1,17 @@
 import sqlite3
+import datetime
 
 DB_PATH = "app.db"
 
 def get_conn():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Store Google OAuth credentials
     cur.execute("""
         CREATE TABLE IF NOT EXISTS google_creds (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -22,20 +24,31 @@ def init_db():
         )
     """)
 
-    # Store extracted Gmail event candidates
+    # NEW unified table for ALL sources (gmail now, eventbrite later, etc.)
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS gmail_events (
+        CREATE TABLE IF NOT EXISTS event_candidates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            gmail_message_id TEXT UNIQUE,
+            source TEXT NOT NULL,                     -- "gmail", "eventbrite", etc.
+            source_item_id TEXT NOT NULL,             -- gmail message id, event id, etc.
             title TEXT,
             summary TEXT,
             description TEXT,
             start_time TEXT,
+            end_time TEXT,
+            all_day INTEGER DEFAULT 0,
             location TEXT,
-            status TEXT DEFAULT 'pending'
+            status TEXT DEFAULT 'pending',            -- pending/accepted/rejected
+            confidence REAL DEFAULT 0.5,
+            raw TEXT,                                 -- optional: store raw snippet/json later
+            created_at TEXT DEFAULT (datetime('now'))
         )
     """)
 
+    # prevent duplicates per source
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_event_candidates_source_item
+        ON event_candidates(source, source_item_id)
+    """)
 
     conn.commit()
     conn.close()
@@ -73,53 +86,54 @@ def load_creds():
         FROM google_creds WHERE id=1
     """).fetchone()
     conn.close()
-    return row
+    return tuple(row) if row else None
 
-def save_gmail_event(gmail_id, title, summary, description, start_time, location=None):
+# Keep your old name for minimal changes
+def save_gmail_event(gmail_id, title, summary, description, start_time, location=None, end_time=None, all_day=0, confidence=0.7, raw=None):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT OR IGNORE INTO gmail_events
-        (gmail_message_id, title, summary, description, start_time, location)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (gmail_id, title, summary, description, start_time, location))
-
+        INSERT OR IGNORE INTO event_candidates
+        (source, source_item_id, title, summary, description, start_time, end_time, all_day, location, confidence, raw)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "gmail", gmail_id, title, summary, description, start_time,
+        end_time, int(all_day), location, float(confidence), raw
+    ))
     conn.commit()
     conn.close()
-
 
 def get_next_pending_event():
     conn = get_conn()
     cur = conn.cursor()
     row = cur.execute("""
-        SELECT id, gmail_message_id, title, description, start_time
-        FROM gmail_events
-        WHERE status = 'pending'
+        SELECT id, source, source_item_id, title, summary, description,
+               start_time, end_time, all_day, location, confidence
+        FROM event_candidates
+        WHERE status='pending'
         ORDER BY id ASC
         LIMIT 1
     """).fetchone()
     conn.close()
-    return row
-
-
-def mark_event_status(event_id, status):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE gmail_events
-        SET status = ?
-        WHERE id = ?
-    """, (status, event_id))
-    conn.commit()
-    conn.close()
+    return dict(row) if row else None
 
 def get_event_by_id(event_id):
     conn = get_conn()
     cur = conn.cursor()
     row = cur.execute("""
-        SELECT id, gmail_message_id, title, description, start_time
-        FROM gmail_events
-        WHERE id = ?
+        SELECT id, source, source_item_id, title, summary, description,
+               start_time, end_time, all_day, location, confidence, status
+        FROM event_candidates
+        WHERE id=?
     """, (event_id,)).fetchone()
     conn.close()
-    return row
+    return dict(row) if row else None
+
+def mark_event_status(event_id, status):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE event_candidates SET status=? WHERE id=?
+    """, (status, event_id))
+    conn.commit()
+    conn.close()
