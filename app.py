@@ -23,7 +23,7 @@ from db import (
     mark_event_status,
 )
 
-# -------------------- APP SETUP --------------------
+# -------------------- SETUP --------------------
 
 app = Flask(__name__)
 init_db()
@@ -38,16 +38,16 @@ SCOPES = [
 REDIRECT_URI = "https://deadline-sync.onrender.com/oauth2callback"
 USER_TZ = tz.gettz("America/New_York")
 
-# -------------------- EVENT HEURISTICS --------------------
+# -------------------- HEURISTICS --------------------
 
 NEGATIVE_HINTS = [
     "unsubscribe", "newsletter", "sale", "promo", "promotion",
-    "deal", "discount", "save", "offer"
+    "deal", "discount"
 ]
 
 POSITIVE_HINTS = [
-    "appointment", "scheduled", "reminder", "pickup", "delivery",
-    "reservation", "booking", "deadline", "due"
+    "appointment", "scheduled", "reminder", "pickup",
+    "delivery", "reservation", "booking", "deadline", "due"
 ]
 
 SOCIAL_HINTS = [
@@ -95,10 +95,19 @@ def looks_like_event(subject, sender, body):
     if re.search(r"\b(\d{1,2}(:\d{2})?\s?(am|pm))\b", t):
         score += 1
 
-    if re.search(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b", t):
+    if re.search(
+        r"\b(?:today|tomorrow|tonight|friday|saturday|sunday|monday|tuesday|wednesday|thursday)\b",
+        t,
+    ):
         score += 1
 
-    return score >= 2, score
+    if re.search(
+        r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b",
+        t,
+    ):
+        score += 1
+
+    return score >= 1, score   # MVP MODE: permissive
 
 
 def parse_datetime(text):
@@ -136,39 +145,6 @@ def get_services():
         build("gmail", "v1", credentials=creds),
         build("calendar", "v3", credentials=creds),
     )
-
-
-def ai_extract_event(subject, body):
-    prompt = f"""
-Return ONLY JSON.
-
-If not an event:
-{{"is_event": false}}
-
-If event:
-{{
-  "is_event": true,
-  "title": "...",
-  "summary": "...",
-  "start_time": "ISO8601"
-}}
-
-Subject:
-{subject}
-
-Body:
-{body[:2000]}
-"""
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-
-    try:
-        return json.loads(resp.choices[0].message.content)
-    except:
-        return None
 
 # -------------------- ROUTES --------------------
 
@@ -231,7 +207,8 @@ def sync():
         return "Not connected."
 
     messages = gmail.users().messages().list(
-        userId="me", maxResults=50
+        userId="me",
+        maxResults=50
     ).execute().get("messages", [])
 
     added = 0
@@ -247,17 +224,20 @@ def sync():
         sender = next((h["value"] for h in headers if h["name"] == "From"), "")
         body = extract_text(msg["payload"])
 
-        ok, _ = looks_like_event(subject, sender, body)
+        ok, score = looks_like_event(subject, sender, body)
         if not ok:
             continue
 
         dt = parse_datetime(subject + "\n" + body)
-        if not dt or dt < now - datetime.timedelta(days=1):
-            continue
+
+        # HARD FALLBACK — never silently drop
+        if not dt:
+            dt = now + datetime.timedelta(days=1)
+            dt = dt.replace(hour=9, minute=0, second=0, microsecond=0)
 
         save_gmail_event(
             gmail_id=m["id"],
-            title=subject[:180],
+            title=subject[:180] or "Event",
             summary=None,
             description=body[:2000],
             start_time=dt.isoformat(),
