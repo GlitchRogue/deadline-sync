@@ -374,7 +374,7 @@ def sync():
     <h3>Scan complete</h3>
     <p>Saved <b>{added}</b> event candidates.</p>
     <a href="/review">Review events</a><br>
-    <a url_for("home")>Back home</a>
+    <a href="{url_for('home')}">⬅ Back to Home</a>
     """
 
         
@@ -384,7 +384,7 @@ def review():
     if not event:
         return """
         <h3>No pending events 🎉</h3>
-        <a url_for("home")>⬅ Back to Home</a>
+        <a href="{url_for('home')}">⬅ Back to Home</a>
         """
 
     title = event.get("title") or "Untitled"
@@ -410,7 +410,7 @@ def review():
         <button type="submit">❌ Skip</button>
     </form>
 
-    <a url_for("home")>⬅ Back to Home</a>
+    <a href="{url_for('home')}">⬅ Back to Home</a>
     """
 
 
@@ -456,17 +456,16 @@ def reject(event_id):
 
 @app.route("/")
 def home():
-return f"""
-    <h3>Scan complete</h3>
-    <p>Saved <b>{added}</b> event candidates.</p>
+    return """
+    <h2>Deadline Sync</h2>
 
-    <p>
-      <a href="/review">Review events</a>
-    </p>
+    <p><a href="/connect">Connect Google</a></p>
 
-    <p>
-      <a href="/">Back home</a>
-    </p>
+    <form action="/sync" method="post">
+        <button type="submit">Scan Gmail for events</button>
+    </form>
+
+    <p><a href="/review">Review pending events</a></p>
     """
 
 
