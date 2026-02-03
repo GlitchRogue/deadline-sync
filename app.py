@@ -456,17 +456,18 @@ def reject(event_id):
 
 @app.route("/")
 def home():
-    return """
-    <h2>Deadline Sync</h2>
+return f"""
+    <h3>Scan complete</h3>
+    <p>Saved <b>{added}</b> event candidates.</p>
 
-    <a href="/connect">Connect Google</a><br><br>
+    <p>
+      <a href="/review">Review events</a>
+    </p>
 
-    <form action="/sync" method="post">
-      <button type="submit">Scan Gmail for events</button>
-    </form>
-
-    <br>
-    <a href="/review">Review pending events</a>
+    <p>
+      <a href="/">Back home</a>
+    </p>
     """
+
 
 
