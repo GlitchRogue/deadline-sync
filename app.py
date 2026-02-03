@@ -254,6 +254,7 @@ def sync():
     added = 0
     now = datetime.datetime.now(tz=USER_TZ)
 
+    # ---------- DETERMINISTIC PASS ----------
     for m in messages:
         msg = gmail.users().messages().get(
             userId="me",
@@ -271,33 +272,31 @@ def sync():
             continue
 
         text = subject + "\n" + body
-
-        # Try to parse a datetime deterministically
         dt = None
 
-        # Prefer explicit date-like snippets when present
         date_snip = re.search(
             r"(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}(/\d{2,4})?\b)",
             text,
             re.I
         )
+
         if date_snip:
             try:
                 dt = dateparser.parse(date_snip.group(1), fuzzy=True)
                 dt = normalize_dt(dt)
-                # If no time found anywhere, default to 9am
-                if dt and not re.search(r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b", text, re.I):
+                if dt and not re.search(
+                    r"\b(\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}:\d{2})\b",
+                    text,
+                    re.I
+                ):
                     dt = dt.replace(hour=9, minute=0, second=0, microsecond=0)
             except:
                 dt = None
 
-        # If we still don't have dt, try fuzzy parse on subject first (often contains date)
         if not dt:
             dt = parse_first_datetime(subject)
 
-        # Filter: only future-ish, avoid ancient junk
         if not dt:
-            # We'll let AI handle it for strong candidates later
             continue
 
         if dt < now - datetime.timedelta(days=1):
@@ -317,9 +316,7 @@ def sync():
         )
         added += 1
 
-    # ---------- AI ENRICHMENT / FALLBACK ----------
-    # Run AI on a small set of strong-looking emails where deterministic failed to add anything.
-    # This catches package pickup, service reminders, reservations, etc.
+    # ---------- AI FALLBACK ----------
     scanned_ai = 0
     for m in messages[:15]:
         if scanned_ai >= 8:
@@ -346,7 +343,6 @@ def sync():
         if not ai or not ai.get("is_event") or not ai.get("start_time"):
             continue
 
-        # Basic sanity: parse AI datetime
         try:
             dt = normalize_dt(dateparser.parse(ai["start_time"]))
         except:
@@ -354,14 +350,15 @@ def sync():
 
         if not dt:
             continue
-
-        if dt < now - datetime.timedelta(days=1) or dt > now + datetime.timedelta(days=180):
+        if dt < now - datetime.timedelta(days=1):
+            continue
+        if dt > now + datetime.timedelta(days=180):
             continue
 
         save_gmail_event(
             gmail_id=m["id"],
             title=(ai.get("title") or subject).strip()[:180],
-            summary=(ai.get("summary") or None),
+            summary=ai.get("summary"),
             description=body[:2000],
             start_time=dt.isoformat(),
             end_time=ai.get("end_time"),
@@ -371,6 +368,15 @@ def sync():
             raw=json.dumps(ai)
         )
         added += 1
+
+    # ---------- REQUIRED RETURN ----------
+    return f"""
+    <h3>Scan complete</h3>
+    <p>Saved <b>{added}</b> event candidates.</p>
+    <a href="/review">Review events</a><br>
+    <a url_for("home")>Back home</a>
+    """
+
         
 @app.route("/review")
 def review():
@@ -378,7 +384,7 @@ def review():
     if not event:
         return """
         <h3>No pending events 🎉</h3>
-        <a href="/">⬅ Back to Home</a>
+        <a url_for("home")>⬅ Back to Home</a>
         """
 
     title = event.get("title") or "Untitled"
@@ -404,7 +410,7 @@ def review():
         <button type="submit">❌ Skip</button>
     </form>
 
-    <a href="/">⬅ Back to Home</a>
+    <a url_for("home")>⬅ Back to Home</a>
     """
 
 
