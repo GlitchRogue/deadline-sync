@@ -384,7 +384,7 @@ def review():
     if not event:
         return """
         <h3>No pending events 🎉</h3>
-        <a href="{url_for('home')}">⬅ Back to Home</a>
+        <p><a href="/">⬅ Back to Home</a></p>
         """
 
     title = event.get("title") or "Untitled"
@@ -410,7 +410,7 @@ def review():
         <button type="submit">❌ Skip</button>
     </form>
 
-    <a href="{url_for('home')}">⬅ Back to Home</a>
+    <p><a href="/">⬅ Back to Home</a></p>
     """
 
 
