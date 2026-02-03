@@ -12,8 +12,6 @@ from google.auth.transport.requests import Request
 from dateutil import parser as dateparser
 from dateutil import tz
 from openai import OpenAI
-from dateutil import tz
-
 
 from db import (
     init_db,
@@ -449,4 +447,20 @@ def accept(event_id):
 def reject(event_id):
     mark_event_status(event_id, "rejected")
     return redirect(url_for("review"))
+
+@app.route("/")
+def home():
+    return """
+    <h2>Deadline Sync</h2>
+
+    <a href="/connect">Connect Google</a><br><br>
+
+    <form action="/sync" method="post">
+      <button type="submit">Scan Gmail for events</button>
+    </form>
+
+    <br>
+    <a href="/review">Review pending events</a>
+    """
+
 
