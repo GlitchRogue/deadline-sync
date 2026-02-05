@@ -262,7 +262,20 @@ def review():
         <p><a href="/">Back home</a></p>
         """
 
-    event_id, _, title, summary, description, start_time, location = event
+    # event is a dict (from sqlite row_factory) OR tuple
+    # support BOTH safely
+    if isinstance(event, dict):
+        event_id = event["id"]
+        title = event.get("title")
+        summary = event.get("summary")
+        description = event.get("description")
+        start_time = event.get("start_time")
+    else:
+        event_id = event[0]
+        title = event[2]
+        summary = event[3]
+        description = event[4]
+        start_time = event[5]
 
     return f"""
     <h3>{title}</h3>
@@ -279,7 +292,6 @@ def review():
 
     <p><a href="/">Back home</a></p>
     """
-
 
 @app.route("/accept/<int:event_id>", methods=["POST"])
 def accept(event_id):
