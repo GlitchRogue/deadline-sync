@@ -21,6 +21,7 @@ from db import (
     get_next_pending_event,
     get_event_by_id,
     mark_event_status,
+    gmail_event_exists,   # ← ADD THIS
 )
 
 # -------------------- SETUP --------------------
@@ -234,6 +235,9 @@ def sync():
         if not dt:
             dt = now + datetime.timedelta(days=1)
             dt = dt.replace(hour=9, minute=0, second=0, microsecond=0)
+        
+        if gmail_event_exists(m["id"]):
+            continue
 
         save_gmail_event(
             gmail_id=m["id"],
