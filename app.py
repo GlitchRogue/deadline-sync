@@ -297,21 +297,39 @@ def review():
 def accept(event_id):
     _, calendar = get_services()
     event = get_event_by_id(event_id)
+
     if not calendar or not event:
         return redirect(url_for("review"))
 
-    _, _, title, summary, description, start_time, _ = event
+    # Support tuple OR dict
+    if isinstance(event, dict):
+        title = event.get("title") or "Event"
+        summary = event.get("summary")
+        description = event.get("description") or ""
+        location = event.get("location")
+        start_time = event.get("start_time")
+    else:
+        title = event[2] or "Event"
+        summary = event[3]
+        description = event[4] or ""
+        start_time = event[5]
+        location = event[7] if len(event) > 7 else None
 
     start = normalize_dt(dateparser.parse(start_time))
+    if not start:
+        mark_event_status(event_id, "rejected")
+        return redirect(url_for("review"))
+
     end = start + datetime.timedelta(hours=1)
 
     calendar.events().insert(
         calendarId="primary",
         body={
             "summary": title,
+            "location": location,
             "description": summary or description,
-            "start": {"dateTime": start.isoformat()},
-            "end": {"dateTime": end.isoformat()},
+            "start": {"dateTime": start.isoformat(), "timeZone": "America/New_York"},
+            "end": {"dateTime": end.isoformat(), "timeZone": "America/New_York"},
         }
     ).execute()
 
