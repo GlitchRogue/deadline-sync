@@ -137,3 +137,14 @@ def mark_event_status(event_id, status):
     """, (status, event_id))
     conn.commit()
     conn.close()
+
+def gmail_event_exists(gmail_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM events WHERE gmail_id = ? LIMIT 1",
+        (gmail_id,)
+    )
+    exists = cur.fetchone() is not None
+    conn.close()
+    return exists
